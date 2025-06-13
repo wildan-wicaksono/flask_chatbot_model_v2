@@ -1,9 +1,10 @@
 # Import libraries
-import json, re, pickle, random
+import json, re, pickle, io, random, seaborn
 import numpy as np
-from flask import Flask, request, jsonify
-
-
+import matplotlib.pyplot as plt
+import seaborn as sns
+import nltk
+from gensim.models import KeyedVectors
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
@@ -13,10 +14,8 @@ from tensorflow.keras.layers import Embedding, GRU, Dense, Dropout, Bidirectiona
 from tensorflow.keras.preprocessing.text import Tokenizer
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+import os
 
-
-# === Inisialisasi Flask App ===
-app = Flask(__name__)
 
 tips_responses = {
   "stress_due_to_academic": [
@@ -575,7 +574,7 @@ INTENT_KEYWORDS = {
         "sulit tidur", "trouble sleeping", "sleep problems", "masalah tidur",
         "begadang", "stay up", "all nighter", "terjaga", "awake", "restless",
         "gelisah", "tossing turning", "bolak balik", "count sheep", "sheep counting",
-        "tired but can't sleep", "capek tapi gabisa tidur", "overthinking at night"
+        "tired but can't sleep", "capek tapi gabisa tidur", "overthinking at night", "ngantuk"
     ]
 }
 
@@ -1011,10 +1010,29 @@ class ChatbotState:
         self.conversation_history = []
         self.session_start = True
 
-    def reset(self):
-        old_name = self.user_name
-        self.__init__()
-        return f"🔄 Obrolan telah direset. Sampai jumpa {old_name}! 😊"
+    def reset(self, keep_user=True):
+        """Enhanced reset - keeps username but resets conversation flow"""
+        user_name = self.user_name  # Save current username
+        
+        # Reset conversation state but keep username if requested
+        self.context = "awaiting_feeling"  # Skip name asking
+        if not keep_user:
+            self.user_name = ""
+            self.context = None  # Will ask for name again
+        
+        self.fail_count = 0
+        self.current_topic = None
+        self.last_tag = None
+        self.conversation_history = []
+        self.session_start = False
+        
+        # Return appropriate message
+        if keep_user and user_name:
+            return f"🔄 Obrolan telah direset, {user_name}! 😊"
+        elif not keep_user and user_name:
+            return f"🔄 Obrolan telah direset. Sampai jumpa {user_name}! 😊\n\nHai! Boleh aku tahu siapa namamu? 😊"
+        else:
+            return "🔄 Obrolan telah direset. Hai! Boleh aku tahu siapa namamu? 😊"
 
     def add_to_history(self, user_input, bot_response, intent=None, confidence=None):
         self.conversation_history.append({
@@ -1076,7 +1094,6 @@ except FileNotFoundError:
             "Wah, bagus banget! Senang lihat kamu dalam mood yang baik.",
             "Alhamdulillah ya! Semoga perasaan baikmu ini terus berlanjut."
         ],
-        # ... tambah default responses lainnya jika diperlukan
     }
 
 # Import tips_responses dan decline_responses
@@ -1093,7 +1110,7 @@ def get_general_response_with_options(tag):
     # Dapatkan base response dari intents_main.json
     base_response = get_response_from_intent(tag)
 
-    # Tambahkan pilihan spesifik untuk general intents
+    # Tambahan pilihan spesifik untuk general intents
     options_text = {
         "stress_general": "\n\nUntuk bisa membantumu dengan lebih tepat, bisa kamu ceritakan sedikit lebih detail tentang sumber stressmu?\n\n1. 📚 Tekanan akademik (kuliah, tugas, ujian)\n2. 💼 Masalah pekerjaan atau karir\n3. 👨‍👩‍👧‍👦 Konflik atau tekanan dari keluarga\n4. 💔 Masalah dalam hubungan percintaan\n5. 🌍 Tekanan hidup secara umum (finansial, masa depan, dll)",
 
@@ -1232,16 +1249,35 @@ def get_specific_decline(tag):
     return None
 
 # === Main Chatbot Response Function ===
+def is_inline_emotion_tag(tag):
+    return tag in [
+        "positive_responses",
+        "sadness_general",
+        "galau_general",
+        "insomnia_general"
+    ]
+
+def is_inline_emotion_tag(tag):
+    return tag in [
+        "positive_responses",
+        "sadness_general",
+        "galau_general",
+        "insomnia_general"
+    ]
+
+# Simulasi variabel sesi pengguna
+current_topic = None
+last_tag = None
+context = None
+emotion_context = None
+
 def chatbot_response(user_input):
-    """Enhanced main chatbot response function"""
     original_input = user_input.strip()
     user_input_lower = user_input.lower().strip()
 
-    # Handle reset
     if user_input_lower in ["reset", "ulang", "mulai lagi", "start over"]:
         return state.reset()
 
-    # Handle appreciation - Menghindari "goodbye" sebelum quit
     if handle_appreciation(user_input_lower):
         appreciation_responses = [
             f"Sama-sama ya, {state.user_name or 'teman'} 🌷 Senang bisa bantu.",
@@ -1253,9 +1289,6 @@ def chatbot_response(user_input):
         state.add_to_history(original_input, response)
         return response
 
-    # === CONVERSATION FLOW ===
-
-    # Initial greet
     if state.context is None:
         state.context = "awaiting_name"
         if handle_greetings(user_input_lower):
@@ -1265,7 +1298,6 @@ def chatbot_response(user_input):
         state.add_to_history(original_input, response)
         return response
 
-    # Name collection
     if state.context == "awaiting_name":
         state.user_name = extract_name(user_input)
         state.context = "awaiting_feeling"
@@ -1273,7 +1305,6 @@ def chatbot_response(user_input):
         state.add_to_history(original_input, response)
         return response
 
-    # Handle tip permission context
     if state.context == "awaiting_tip_permission":
         if user_input_lower in ["iya", "ya", "mau", "boleh", "lanjut", "oke", "ok", "yup", "yes", "y"]:
             state.context = "conversation_end"
@@ -1289,7 +1320,11 @@ def chatbot_response(user_input):
         state.add_to_history(original_input, response)
         return response
 
-    # Handle choice selection context
+    if state.context == "conversation_end":
+        state.context = "awaiting_feeling"
+        state.current_topic = None
+        state.last_tag = None
+
     if state.context == "awaiting_choice":
         choice_mapping = get_general_options_mapping()
         if state.current_topic in choice_mapping:
@@ -1299,9 +1334,7 @@ def chatbot_response(user_input):
                 state.context = "awaiting_tip_permission"
                 state.last_tag = specific_intent
 
-                # Get respons spesifik dari intents_main.json
                 base_response = get_response_from_intent(specific_intent)
-
                 full_response = f"{base_response}\n\nMau aku bantu kasih beberapa tips untuk menghadapi ini, {state.user_name}?"
 
                 state.add_to_history(original_input, full_response, specific_intent, 1.0)
@@ -1314,15 +1347,63 @@ def chatbot_response(user_input):
                 state.add_to_history(original_input, response)
                 return response
 
-    # === INTENT PREDICTION ===
+    try:
+        prediction_result = enhanced_predict_intent(user_input)
 
-    # Predict intent yang telah di-boost
-    tag, confidence, top_3_tags, top_3_confidences = enhanced_predict_intent(user_input)
+        if prediction_result is None or not isinstance(prediction_result, (tuple, list)) or len(prediction_result) != 4:
+            processed_input = preprocess_input(user_input)
+            seq = tokenizer.texts_to_sequences([processed_input])
+            padded = pad_sequences(seq, truncating="post", maxlen=max_len)
+            pred = model.predict(padded, verbose=0)[0]
+            top_idx = np.argmax(pred)
+            tag = lbl_encoder.inverse_transform([top_idx])[0]
+            confidence = float(pred[top_idx])
+            top_3_tags = [tag]
+            top_3_confidences = [confidence]
+        else:
+            tag, confidence, top_3_tags, top_3_confidences = prediction_result
 
-    # uncomment ini kalau mau cek inference
-    # print(f"[DEBUG] Tag: {tag} | Confidence: {confidence:.2f} | Context: {state.context}")
+    except Exception as e:
+        response = f"Maaf {state.user_name or 'teman'}, ada sedikit gangguan teknis. Bisa coba lagi?"
+        state.add_to_history(original_input, response)
+        return response
 
-    # Handle special intents
+    if is_inline_emotion_tag(tag):
+        state.emotion_context = tag
+        response = get_response_from_intent(tag)
+        state.add_to_history(original_input, response, tag, confidence)
+        return response
+
+    invalid_transitions = [
+    (a, b)
+    for a in ["positive_responses", "sadness_general", "galau_general", "insomnia_general"]
+    for b in ["positive_responses", "sadness_general", "galau_general", "insomnia_general"]
+    if a != b
+]
+    if hasattr(state, 'emotion_context') and state.emotion_context and (state.emotion_context, tag) in invalid_transitions:
+        response = (
+            f"Tadi kamu sempat merasa {state.emotion_context.replace('_general','').replace('_',' ')}, "
+            f"sekarang kamu bilang {tag.replace('_general','').replace('_',' ')}. "
+            "Maukah kamu cerita lebih lanjut supaya aku bisa memahami lebih dalam?"
+        )
+        state.add_to_history(original_input, response, tag, confidence)
+        return response
+        response = (
+            f"Tadi kamu sempat merasa {emotion_context.replace('_general','').replace('_',' ')}, "
+            f"sekarang kamu bilang {tag.replace('_general','').replace('_',' ')}. "
+            "Maukah kamu cerita lebih lanjut supaya aku bisa memahami lebih dalam?"
+        )
+        state.add_to_history(original_input, response, tag, confidence)
+        return response
+
+    if tag in allowed_general_intents and state.context != "awaiting_choice":
+        state.context = "awaiting_choice"
+        state.current_topic = tag
+        state.emotion_context = None  # Reset emosi saat mulai topik baru
+        response = get_general_response_with_options(tag)
+        state.add_to_history(original_input, response, tag, confidence)
+        return response
+
     if tag == "out_of_domain":
         response = f"Maaf {state.user_name or 'teman'}, sepertinya topik ini di luar area yang bisa aku bantu. Aku di sini khusus untuk mendengarkan dan mendukung kesehatan mentalmu. Ada hal lain yang ingin kamu ceritakan tentang perasaan atau situasi yang sedang kamu hadapi?"
         state.add_to_history(original_input, response, tag, confidence)
@@ -1333,7 +1414,6 @@ def chatbot_response(user_input):
         state.add_to_history(original_input, response, tag, confidence)
         return response
 
-    # Handle universal intents
     if tag in universal_intents:
         if tag == "greet_user":
             response = f"Hai {state.user_name}! Gimana kabarmu hari ini?"
@@ -1347,7 +1427,6 @@ def chatbot_response(user_input):
         state.add_to_history(original_input, response, tag, confidence)
         return response
 
-    # Handle conversation flow berdasarkan context
     if state.context == "awaiting_feeling" and tag in allowed_general_intents:
         state.current_topic = tag
         state.context = "awaiting_choice"
@@ -1355,7 +1434,6 @@ def chatbot_response(user_input):
         state.add_to_history(original_input, response, tag, confidence)
         return response
 
-    # Low confidence handling
     if confidence < CONFIDENCE_THRESHOLD:
         state.fail_count += 1
         if state.fail_count >= MAX_FAILS:
@@ -1367,35 +1445,33 @@ def chatbot_response(user_input):
         state.add_to_history(original_input, response, tag, confidence)
         return response
 
-    # Direct specific intent (bypass general)
-    if tag.endswith(('_due_to_academic', '_due_to_work', '_due_to_family', '_due_to_relationship', '_due_to_life_pressure',
-                     '_due_to_future', '_due_to_failure', '_due_to_expectation', '_due_to_social',
-                     '_low_confidence', '_social_comparison', '_imposter_syndrome',
-                     '_breakup', '_cheated', '_rejected', '_ghosted',
-                     '_no_friends', '_no_one_to_talk_to', '_feel_misunderstood',
-                     '_loss_of_person', '_loss_of_pet', '_due_to_divorce',
-                     '_chronic_sadness', '_loss_of_interest', '_emotional_numbness',
-                     '_about_decision', '_about_relationship', '_about_self')):
+    if tag.endswith((
+        '_due_to_academic', '_due_to_work', '_due_to_family', '_due_to_relationship', '_due_to_life_pressure',
+        '_due_to_future', '_due_to_failure', '_due_to_expectation', '_due_to_social',
+        '_low_confidence', '_social_comparison', '_imposter_syndrome',
+        '_breakup', '_cheated', '_rejected', '_ghosted',
+        '_no_friends', '_no_one_to_talk_to', '_feel_misunderstood',
+        '_loss_of_person', '_loss_of_pet', '_due_to_divorce',
+        '_chronic_sadness', '_loss_of_interest', '_emotional_numbness',
+        '_about_decision', '_about_relationship', '_about_self')):
 
         state.context = "awaiting_tip_permission"
         state.last_tag = tag
-
         base_response = get_response_from_intent(tag)
-
         full_response = f"{base_response}\n\nMau aku bantu kasih beberapa tips untuk menghadapi ini, {state.user_name}?"
-
         state.add_to_history(original_input, full_response, tag, confidence)
         return {
             "text": full_response,
             "options": ["Ya", "Tidak"]
         }
 
-    # Default response dari intents_main.json
     response = get_response_from_intent(tag)
     state.fail_count = 0
-
     state.add_to_history(original_input, response, tag, confidence)
     return response
+
+
+
 
 # === Interaksi chatbot ===
 def main():
@@ -1445,20 +1521,5 @@ def main():
             print(f"🤖 Bot: Maaf, ada kesalahan teknis. {str(e)}")
             print("🤖 Bot:", state.reset())
 
-# === Endpoint Flask ===
-@app.route("/chat", methods=["POST"])
-def chat():
-    user_message = request.json.get("message", "")
-    if not user_message:
-        return jsonify({"response": "Pesan tidak boleh kosong"}), 400
-    bot_reply = chatbot_response(user_message)
-    return jsonify({"response": bot_reply})
-
-# === Jalankan Server ===
 if __name__ == "__main__":
-    # Autentikasi ngrok
-
-
-    import os
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    main()

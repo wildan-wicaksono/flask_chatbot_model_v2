@@ -2441,6 +2441,7 @@
         "Hati yang sedang patah itu membutuhkan ruang yang aman, lembut, dan penuh pengertian untuk bisa beristirahat dan memulai proses penyembuhannya, {user_name}. Ketahuilah bahwa kamu tidak sendirian dalam merasakan sakit ini. Mari kita coba untuk memahaminya bersama secara perlahan.",
         "Rasanya seperti dunia ini runtuh seketika ya, {user_name}, ketika seseorang yang kita sayangi dan percayai justru pergi atau menyakiti kita. Kamu tidak perlu terburu-buru untuk merasa kuat atau segera melupakan semuanya. Perasaan sakitmu itu valid. Aku di sini untuk menemanimu melewati ini."
       ],
+      "context_filter": "awaiting_feeling",
       "context_set": "awaiting_heartbreak_reason"
     },
     {
