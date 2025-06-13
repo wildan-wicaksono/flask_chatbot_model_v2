@@ -1,10 +1,8 @@
 # Import libraries
-import json, re, pickle, io, random, seaborn
+import json, re, pickle, io, random
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import nltk
-from gensim.models import KeyedVectors
+
+
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
@@ -16,6 +14,8 @@ from tensorflow.keras.preprocessing.sequence import pad_sequences
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 import os
 
+# === Inisialisasi Flask App ===
+app = Flask(__name__)
 
 tips_responses = {
   "stress_due_to_academic": [
@@ -1521,5 +1521,20 @@ def main():
             print(f"🤖 Bot: Maaf, ada kesalahan teknis. {str(e)}")
             print("🤖 Bot:", state.reset())
 
+# === Endpoint Flask ===
+@app.route("/chat", methods=["POST"])
+def chat():
+    user_message = request.json.get("message", "")
+    if not user_message:
+        return jsonify({"response": "Pesan tidak boleh kosong"}), 400
+    bot_reply = chatbot_response(user_message)
+    return jsonify({"response": bot_reply})
+
+# === Jalankan Server ===
 if __name__ == "__main__":
-    main()
+    # Autentikasi ngrok
+
+
+    import os
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
