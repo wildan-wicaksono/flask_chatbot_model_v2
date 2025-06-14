@@ -1010,29 +1010,10 @@ class ChatbotState:
         self.conversation_history = []
         self.session_start = True
 
-    def reset(self, keep_user=True):
-        """Enhanced reset - keeps username but resets conversation flow"""
-        user_name = self.user_name  # Save current username
-        
-        # Reset conversation state but keep username if requested
-        self.context = "awaiting_feeling"  # Skip name asking
-        if not keep_user:
-            self.user_name = ""
-            self.context = None  # Will ask for name again
-        
-        self.fail_count = 0
-        self.current_topic = None
-        self.last_tag = None
-        self.conversation_history = []
-        self.session_start = False
-        
-        # Return appropriate message
-        if keep_user and user_name:
-            return f"🔄 Obrolan telah direset, {user_name}! 😊"
-        elif not keep_user and user_name:
-            return f"🔄 Obrolan telah direset. Sampai jumpa {user_name}! 😊\n\nHai! Boleh aku tahu siapa namamu? 😊"
-        else:
-            return "🔄 Obrolan telah direset. Hai! Boleh aku tahu siapa namamu? 😊"
+    def reset(self):
+        old_name = self.user_name
+        self.__init__()
+        return f"🔄 Obrolan telah direset. Sampai jumpa {old_name}! 😊"
 
     def add_to_history(self, user_input, bot_response, intent=None, confidence=None):
         self.conversation_history.append({
